@@ -51,6 +51,22 @@ inputs:
     description: 'Show detailed advisory descriptions'
     required: false
     default: 'false'
+  reviewdog:
+    description: 'Enable reviewdog to post inline PR comments for findings'
+    required: false
+    default: 'false'
+  github-token:
+    description: 'GitHub token for reviewdog API access'
+    required: false
+    default: '${{ github.token }}'
+  reviewdog-reporter:
+    description: 'reviewdog reporter (github-pr-review, github-pr-check, github-check)'
+    required: false
+    default: 'github-pr-review'
+  reviewdog-filter-mode:
+    description: 'reviewdog filter mode (nofilter shows all findings regardless of diff)'
+    required: false
+    default: 'nofilter'
 
 outputs:
   exit-code:
@@ -151,3 +167,140 @@ runs:
 
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         exit $code
+
+    - name: Install reviewdog
+      if: inputs.reviewdog == 'true' && (success() || failure())
+      shell: bash
+      run: |
+        curl -sfL https://raw.githubusercontent.com/reviewdog/reviewdog/master/install.sh | sh -s -- -b /usr/local/bin
+
+    - name: Report findings with reviewdog
+      if: inputs.reviewdog == 'true' && (success() || failure())
+      shell: bash
+      env:
+        REVIEWDOG_GITHUB_API_TOKEN: ${{ inputs.github-token }}
+      run: |
+        lockfile="${{ inputs.working-directory }}/${{ inputs.gemfile-lock }}"
+
+        args=("check")
+        args+=("${{ inputs.working-directory }}")
+        args+=("--gemfile-lock" "${{ inputs.gemfile-lock }}")
+        args+=("--format" "json")
+
+        if [ -n "${{ inputs.severity }}" ]; then
+          args+=("--severity" "${{ inputs.severity }}")
+        fi
+
+        if [ "${{ inputs.strict }}" = "true" ]; then
+          args+=("--strict")
+        fi
+
+        if [ -n "${{ inputs.max-db-age }}" ]; then
+          args+=("--max-db-age" "${{ inputs.max-db-age }}")
+        fi
+
+        if [ -n "${{ inputs.ignore }}" ]; then
+          args+=("--ignore" ${{ inputs.ignore }})
+        fi
+
+        set +e
+        json_output=$(${{ steps.download.outputs.bin }} "${args[@]}" 2>/dev/null)
+        set -e
+
+        if [ -z "$json_output" ]; then
+          echo "No findings to report."
+          exit 0
+        fi
+
+        echo "$json_output" | jq -c '
+          .unpatched_gems // [] | .[] |
+          {
+            name: .name,
+            version: .version,
+            advisories: (.advisories // [])
+          }
+        ' | while IFS= read -r gem; do
+          gem_name=$(echo "$gem" | jq -r '.name')
+          gem_version=$(echo "$gem" | jq -r '.version')
+
+          line=$(grep -Fn "    ${gem_name} (${gem_version})" "$lockfile" | head -1 | cut -d: -f1 || true)
+
+          echo "$gem" | jq -c '.advisories[]' | while IFS= read -r advisory; do
+            id=$(echo "$advisory" | jq -r '.id // empty')
+            title=$(echo "$advisory" | jq -r '.title // "Unknown vulnerability"')
+            url=$(echo "$advisory" | jq -r '.url // empty')
+            criticality=$(echo "$advisory" | jq -r '.criticality // "unknown"' | tr '[:upper:]' '[:lower:]')
+
+            case "$criticality" in
+              critical|high) severity="ERROR" ;;
+              medium)        severity="WARNING" ;;
+              *)             severity="INFO" ;;
+            esac
+
+            message="${id}: ${title}"
+
+            if [ -n "$line" ]; then
+              location=$(jq -n -c --arg path "$lockfile" --argjson line "$line" \
+                '{path: $path, range: {start: {line: $line, column: 1}}}')
+            else
+              location=$(jq -n -c --arg path "$lockfile" '{path: $path}')
+            fi
+
+            if [ -n "$id" ] && [ -n "$url" ]; then
+              code_obj=$(jq -n -c --arg value "$id" --arg url "$url" '{value: $value, url: $url}')
+            elif [ -n "$id" ]; then
+              code_obj=$(jq -n -c --arg value "$id" '{value: $value}')
+            else
+              code_obj="{}"
+            fi
+
+            jq -n -c \
+              --arg message "$message" \
+              --arg severity "$severity" \
+              --argjson location "$location" \
+              --argjson code "$code_obj" \
+              '{message: $message, location: $location, severity: $severity, code: $code}'
+          done
+        done | reviewdog \
+          -f=rdjsonl \
+          -name=gem-audit \
+          -reporter="${{ inputs.reviewdog-reporter }}" \
+          -filter-mode="${{ inputs.reviewdog-filter-mode }}" \
+          -fail-level=none \
+          -level=warning
+
+        # Also report insecure sources
+        echo "$json_output" | jq -c '
+          .insecure_sources // [] | .[]
+        ' | while IFS= read -r source; do
+          source_url=$(echo "$source" | jq -r '.url // .source // empty')
+          if [ -z "$source_url" ]; then
+            source_url=$(echo "$source" | jq -r '. | if type == "string" then . else empty end')
+          fi
+
+          if [ -z "$source_url" ]; then
+            continue
+          fi
+
+          line=$(grep -Fn "$source_url" "$lockfile" | head -1 | cut -d: -f1 || true)
+
+          message="Insecure source: ${source_url}"
+
+          if [ -n "$line" ]; then
+            location=$(jq -n -c --arg path "$lockfile" --argjson line "$line" \
+              '{path: $path, range: {start: {line: $line, column: 1}}}')
+          else
+            location=$(jq -n -c --arg path "$lockfile" '{path: $path}')
+          fi
+
+          jq -n -c \
+            --arg message "$message" \
+            --argjson location "$location" \
+            '{message: $message, location: $location, severity: "WARNING"}'
+        done | reviewdog \
+          -f=rdjsonl \
+          -name=gem-audit \
+          -reporter="${{ inputs.reviewdog-reporter }}" \
+          -filter-mode="${{ inputs.reviewdog-filter-mode }}" \
+          -fail-level=none \
+          -level=warning
