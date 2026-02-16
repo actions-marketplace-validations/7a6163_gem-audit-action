@@ -123,6 +123,7 @@ runs:
       id: audit
       shell: bash
       run: |
+        mkdir -p "$HOME/.local/share"
         args=("check")
         args+=("${{ inputs.working-directory }}")
         args+=("--gemfile-lock" "${{ inputs.gemfile-lock }}")
