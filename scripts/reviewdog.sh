@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
 # Called by the "Report findings with reviewdog" step in action.yml.
 # Expects the following environment variables:
@@ -59,11 +58,18 @@ if [ -z "$json_output" ]; then
   exit 0
 fi
 
+# Debug: show JSON structure
+echo "::group::gem-audit JSON output"
+echo "$json_output" | head -20
+echo "::endgroup::"
+results_count=$(echo "$json_output" | jq '.results | length' 2>/dev/null || echo "jq-error")
+echo "Results count: $results_count"
+
 rdjsonl_file="${RUNNER_TEMP}/gem-audit-rdjsonl.jsonl"
 : > "$rdjsonl_file"
 
 # Unpatched gems
-echo "$json_output" | jq -c '.results // [] | .[] | select(.type == "unpatched_gem")' | while IFS= read -r result; do
+while IFS= read -r result; do
   gem_name=$(echo "$result" | jq -r '.gem.name')
   gem_version=$(echo "$result" | jq -r '.gem.version')
   id=$(echo "$result" | jq -r '.advisory.id // empty')
@@ -102,10 +108,10 @@ echo "$json_output" | jq -c '.results // [] | .[] | select(.type == "unpatched_g
     --argjson code "$code_obj" \
     '{message: $message, location: $location, severity: $severity, code: $code}' \
     >> "$rdjsonl_file"
-done
+done < <(echo "$json_output" | jq -c '.results // [] | .[] | select(.type == "unpatched_gem")')
 
 # Insecure sources
-echo "$json_output" | jq -c '.results // [] | .[] | select(.type == "insecure_source")' | while IFS= read -r result; do
+while IFS= read -r result; do
   source_url=$(echo "$result" | jq -r '.advisory.url // .gem.name // empty')
 
   if [ -z "$source_url" ]; then
@@ -128,7 +134,7 @@ echo "$json_output" | jq -c '.results // [] | .[] | select(.type == "insecure_so
     --argjson location "$location" \
     '{message: $message, location: $location, severity: "WARNING"}' \
     >> "$rdjsonl_file"
-done
+done < <(echo "$json_output" | jq -c '.results // [] | .[] | select(.type == "insecure_source")')
 
 # Pipe collected findings to reviewdog
 if [ -s "$rdjsonl_file" ]; then
