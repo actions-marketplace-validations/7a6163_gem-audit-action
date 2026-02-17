@@ -70,6 +70,40 @@ Only fail on high and critical vulnerabilities:
           gemfile-lock: Gemfile.lock
 ```
 
+### Reviewdog (inline PR comments)
+
+Post vulnerability findings as inline comments on pull requests using [reviewdog]:
+
+```yaml
+name: Security Audit
+on: [pull_request]
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: 7a6163/gem-audit-action@v1
+        with:
+          reviewdog: 'true'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+> **Note:** The job must have `permissions: pull-requests: write` for reviewdog
+> to post comments.
+
+You can customise the reporter and filter mode:
+
+```yaml
+      - uses: 7a6163/gem-audit-action@v1
+        with:
+          reviewdog: 'true'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          reviewdog-reporter: github-pr-check    # github-pr-review (default), github-pr-check, github-check
+          reviewdog-filter-mode: added            # nofilter (default), added, diff_context, file
+```
+
 ## Inputs
 
 | Input | Description | Default |
@@ -86,6 +120,10 @@ Only fail on high and critical vulnerabilities:
 | `working-directory` | Project directory to audit | `.` |
 | `quiet` | Suppress output | `false` |
 | `verbose` | Show detailed advisory descriptions | `false` |
+| `reviewdog` | Enable reviewdog inline PR comments | `false` |
+| `github-token` | GitHub token for reviewdog API access | `${{ github.token }}` |
+| `reviewdog-reporter` | reviewdog reporter | `github-pr-review` |
+| `reviewdog-filter-mode` | reviewdog filter mode | `nofilter` |
 
 ## Outputs
 
@@ -115,3 +153,4 @@ Only fail on high and critical vulnerabilities:
 MIT
 
 [gem-audit]: https://github.com/7a6163/gem-audit
+[reviewdog]: https://github.com/reviewdog/reviewdog

@@ -58,13 +58,6 @@ if [ -z "$json_output" ]; then
   exit 0
 fi
 
-# Debug: show JSON structure
-echo "::group::gem-audit JSON output"
-echo "$json_output" | head -20
-echo "::endgroup::"
-results_count=$(echo "$json_output" | jq '.results | length' 2>/dev/null || echo "jq-error")
-echo "Results count: $results_count"
-
 rdjsonl_file="${RUNNER_TEMP}/gem-audit-rdjsonl.jsonl"
 : > "$rdjsonl_file"
 
