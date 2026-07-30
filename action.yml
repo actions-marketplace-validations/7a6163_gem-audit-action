@@ -100,6 +100,7 @@ runs:
         if [ "$version" = "latest" ]; then
           download_url=$(curl -sL \
             -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ inputs.github-token }}" \
             "https://api.github.com/repos/7a6163/gem-audit/releases/latest" \
             | grep "browser_download_url.*${target}" \
             | head -1 \
